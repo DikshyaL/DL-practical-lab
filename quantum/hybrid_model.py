@@ -1,74 +1,83 @@
-import pennylane as qml
-from pennylane import numpy as np
+import numpy as np  # numerical operations (arrays, math)
+from qiskit import QuantumCircuit  # builds quantum circuits
+from qiskit_aer import AerSimulator  # simulator for running quantum circuits
 
-# create a quantum device with 2 qubits
-dev = qml.device("default.qubit", wires=2)
+sim = AerSimulator()  # create quantum simulator backend
 
-# define a quantum circuit (this is your "quantum layer")
-@qml.qnode(dev)
-def circuit(x, weights):
+# ---------------- QUANTUM LAYER ----------------
+def quantum_layer(x, weights):  # function that acts like a neural network layer but quantum
     
-    # encode classical data into qubits using rotations
-    qml.AngleEmbedding(x, wires=[0, 1])
+    qc = QuantumCircuit(2)  # create a 2-qubit quantum circuit
     
-    # apply trainable quantum layers (entanglement + rotations)
-    qml.BasicEntanglerLayers(weights, wires=[0, 1])
+    qc.ry(x[0], 0)  # encode first input feature into qubit 0 using rotation
+    qc.ry(x[1], 1)  # encode second input feature into qubit 1 using rotation
     
-    # measure both qubits → gives 2 outputs
-    return [qml.expval(qml.PauliZ(i)) for i in range(2)]
-
-
-# define full hybrid model
-def model(x, weights, W, b):
+    qc.ry(weights[0], 0)  # apply trainable rotation on qubit 0 (learnable parameter)
+    qc.ry(weights[1], 1)  # apply trainable rotation on qubit 1 (learnable parameter)
     
-    # pass input through quantum circuit
-    q_out = circuit(x, weights)
+    qc.cx(0, 1)  # entangle qubit 0 and 1 (this creates quantum correlation)
     
-    # convert quantum output to classical vector
-    q_out = np.array(q_out)
+    qc.measure_all()  # measure all qubits (convert quantum state → classical bits)
     
-    # apply classical linear layer
-    return np.dot(q_out, W) + b
-
-
-# mean squared error loss
-def loss(x, y, weights, W, b):
+    result = sim.run(qc, shots=1000).result()  # run circuit 1000 times (sampling quantum system)
+    counts = result.get_counts()  # get frequency of measurement results
     
-    # get prediction
-    pred = model(x, weights, W, b)
+    prob_00 = counts.get('00', 0) / 1000  # probability of measuring state |00>
+    prob_11 = counts.get('11', 0) / 1000  # probability of measuring state |11>
     
-    # compute squared error
-    return (pred - y) ** 2
+    return np.array([prob_00, prob_11])  # return quantum features as vector
 
 
-# sample input (2 features)
-x = np.array([0.1, 0.5])
-
-# target output (dummy label)
-y = 1.0
-
-# initialize quantum weights (1 layer, 2 qubits)
-weights = np.random.randn(1, 2)
-
-# initialize classical weights
-W = np.random.randn(2)
-
-# bias term
-b = 0.0
-
-# optimizer for quantum weights
-opt = qml.GradientDescentOptimizer(stepsize=0.1)
-
-# training loop
-for i in range(50):
+# ---------------- CLASSICAL MODEL ----------------
+def model(x, weights, W, b):  # full hybrid model (quantum + classical)
     
-    # update quantum weights using gradient descent
-    weights = opt.step(lambda w: loss(x, y, w, W, b), weights)
+    q_out = quantum_layer(x, weights)  # pass input through quantum layer
     
-    # print progress every 10 steps
-    if i % 10 == 0:
-        print(f"Step {i}, Loss: {loss(x, y, weights, W, b)}")
+    return np.dot(q_out, W) + b  # classical linear layer (prediction)
 
 
-# final prediction
-print("Final prediction:", model(x, weights, W, b))
+# ---------------- LOSS FUNCTION ----------------
+def loss(x, y, weights, W, b):  # measures error between prediction and true value
+    
+    pred = model(x, weights, W, b)  # get model prediction
+    
+    return (pred - y) ** 2  # squared error (standard regression loss)
+
+
+# ---------------- DATA ----------------
+x = np.array([0.1, 0.5])  # input features (like a data sample)
+y = 1.0  # true label (target output)
+
+
+# ---------------- PARAMETERS ----------------
+weights = np.random.randn(2)  # quantum circuit parameters (trainable)
+W = np.random.randn(2)  # classical layer weights
+b = 0.0  # bias term
+
+
+# ---------------- TRAINING ----------------
+lr = 0.1  # learning rate
+
+for i in range(20):  # training loop (20 steps)
+    
+    l = loss(x, y, weights, W, b)  # compute current loss
+    
+    grad = np.zeros_like(weights)  # initialize gradient array
+    
+    eps = 1e-3  # small value for numerical gradient approximation
+    
+    for j in range(len(weights)):  # loop over each quantum weight
+        
+        w_temp = weights.copy()  # copy current weights
+        
+        w_temp[j] += eps  # slightly increase one weight
+        
+        grad[j] = (loss(x, y, w_temp, W, b) - l) / eps  # estimate gradient (finite difference)
+    
+    weights -= lr * grad  # update weights using gradient descent
+    
+    print(f"Step {i}, Loss: {l}")  # print training progress
+
+
+# ---------------- FINAL OUTPUT ----------------
+print("Final prediction:", model(x, weights, W, b))  # show final model output
